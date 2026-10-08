@@ -17,6 +17,7 @@ Route::group([
     Route::put('/{project}', [DeployProjectController::class, 'update'])->name('update');
     Route::delete('/{project}', [DeployProjectController::class, 'destroy'])->name('destroy');
     Route::post('/{project}/deploy', [DeployProjectController::class, 'deploy'])->name('deploy');
+    Route::post('/{project}/init', [DeployProjectController::class, 'init'])->name('init');
     Route::post('/{project}/rollback', [DeployProjectController::class, 'rollback'])->name('rollback');
 });
 

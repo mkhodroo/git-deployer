@@ -9,7 +9,11 @@
 @if(isset($status['error']))
 <p>خطا: {{ $status['error'] }}</p>
 @elseif(! ($status['installed'] ?? false))
-<p>هنوز به هاست متصل نشده.</p>
+<p>⚠️ این مسیر هنوز به گیت متصل نیست.</p>
+<form method="POST" action="{{ route('git-deployer.init', $project) }}" style="display:inline">
+@csrf
+<button class="btn btn-g" type="submit" onclick="return confirm('اتصال اولیه انجام شود؟ اگر پوشه خالی نباشد و گیت نباشد، برای جلوگیری از حذف فایل‌ها متوقف می‌شود.')">🔌 اتصال اولیه (init)</button>
+</form>
 @else
 <p>
 @if($status['up_to_date']) ✅ به‌روز است
@@ -66,6 +70,31 @@
 <p>آدرس: <code>{{ route('git-deployer.webhook', $project) }}?token=RAZ</code></p>
 <p>در گیت‌هاب: Settings → Webhooks → Add webhook → آدرس بالا + Content type روی application/json. اگر راز (secret) برای پروژه گذاشتی، همان را در گیت‌هاب هم بگذار تا امضا بررسی شود.</p>
 </div>
+
+<div class="card">
+<h3>🔍 عیب‌یابی محیط (مخصوص هاست اشتراکی)</h3>
+<table>
+<tr><th>مورد</th><th>وضعیت</th><th>جزئیات</th></tr>
+@forelse($diagnose ?? [] as $c)
+<tr>
+<td>{{ $c['label'] }}</td>
+<td>@if($c['ok'] === true) ✅ @elseif($c['ok'] === false) ❌ @else ➖ @endif</td>
+<td><code>{{ $c['detail'] }}</code></td>
+</tr>
+@empty
+<tr><td colspan="3">اطلاعاتی نیست.</td></tr>
+@endforelse
+</table>
+</div>
+
+@if(! empty($lastFailed))
+<div class="card">
+<h3>⚠️ آخرین خطا</h3>
+<p><b>رویداد:</b> {{ $lastFailed->event }} | <b>زمان:</b> {{ $lastFailed->created_at }}</p>
+<p>{{ $lastFailed->message }}</p>
+@if($lastFailed->output)<pre>{{ $lastFailed->output }}</pre>@endif
+</div>
+@endif
 
 <div class="card">
 <h3>آخرین لاگ‌ها</h3>

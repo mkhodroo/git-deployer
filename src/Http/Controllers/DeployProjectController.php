@@ -50,7 +50,15 @@ class DeployProjectController extends Controller
 
         $logs = $project->logs()->limit(20)->get();
 
-        return view('git-deployer::show', compact('project', 'status', 'history', 'logs'));
+        try {
+            $diagnose = $deployer->diagnose($project);
+        } catch (\Throwable) {
+            $diagnose = [];
+        }
+
+        $lastFailed = $project->logs()->where('status', 'failed')->first();
+
+        return view('git-deployer::show', compact('project', 'status', 'history', 'logs', 'diagnose', 'lastFailed'));
     }
 
     public function edit(DeployProject $project)
@@ -98,6 +106,18 @@ class DeployProjectController extends Controller
         try {
             $result = $deployer->rollback($project, $request->input('commit'), $this->actor(), true);
             $msg = 'بازگشت موفق به '.substr($result['to'], 0, 8);
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+
+        return redirect()->route('git-deployer.show', $project)->with('success', $msg);
+    }
+
+    public function init(DeployProject $project, GitDeployer $deployer)
+    {
+        try {
+            $result = $deployer->init($project, $this->actor());
+            $msg = 'اتصال اولیه موفق. کامیت: '.substr($result['commit'], 0, 8);
         } catch (\Throwable $e) {
             return back()->with('error', $e->getMessage());
         }

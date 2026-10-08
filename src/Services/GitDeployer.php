@@ -24,13 +24,27 @@ class GitDeployer
                 $log[] = $this->git->runOrFail(['remote', 'set-url', 'origin', $this->authenticatedUrl($project)], $path);
                 $log[] = $this->git->runOrFail(['fetch', '--all', '--prune'], $path, $this->gitEnv($project));
             } else {
-                $this->ensureEmptyOrCreate($path);
-                $log[] = $this->git->runOrFail(
-                    ['clone', '--branch', $project->branch, $this->authenticatedUrl($project), $path.'.tmp-clone'],
-                    dirname($path),
-                    $this->gitEnv($project)
-                );
-                $this->moveCloneIntoPlace($path);
+                $this->ensureExists($path);
+                if ($this->isEmptyDir($path)) {
+                    $log[] = $this->git->runOrFail(
+                        ['clone', '--branch', $project->branch, $this->authenticatedUrl($project), $path.'.tmp-clone'],
+                        dirname($path),
+                        $this->gitEnv($project)
+                    );
+                    $this->moveCloneIntoPlace($path);
+                } else {
+                    // پوشه پر است و گیت نیست (حالت رایج هاست اشتراکی مثل public_html):
+                    // درجا git init می‌کنیم تا فایل‌های untracked مثل .env حفظ شوند.
+                    // فایل‌هایی که در ریپو هم هستند بازنویسی می‌شوند.
+                    $log[] = $this->git->runOrFail(['init', '-b', $project->branch], $path);
+                    $hasOrigin = $this->git->run(['remote', 'get-url', 'origin'], $path);
+                    if ($hasOrigin['exit_code'] === 0) {
+                        $log[] = $this->git->runOrFail(['remote', 'set-url', 'origin', $this->authenticatedUrl($project)], $path);
+                    } else {
+                        $log[] = $this->git->runOrFail(['remote', 'add', 'origin', $this->authenticatedUrl($project)], $path);
+                    }
+                    $log[] = $this->git->runOrFail(['fetch', 'origin', '--prune', '--tags'], $path, $this->gitEnv($project));
+                }
             }
 
             $this->markSafe($path);
@@ -55,7 +69,7 @@ class GitDeployer
         $from = $project->current_commit;
 
         if (! $this->isGitRepo($path)) {
-            throw new RuntimeException("مسیر نصب یک ریپازیتوری گیت نیست. ابتدا init را اجرا کنید.");
+            throw new RuntimeException("مسیر «{$path}» هنوز به گیت متصل نیست. ابتدا دکمه «اتصال اولیه (init)» را در صفحه پروژه بزنید یا دستور php artisan deployer:init {$project->name} را اجرا کنید.");
         }
 
         $this->markSafe($path);
@@ -174,19 +188,20 @@ class GitDeployer
         return $ref;
     }
 
-    protected function ensureEmptyOrCreate(string $path): void
+    protected function ensureExists(string $path): void
     {
         if (! is_dir($path)) {
             if (! mkdir($path, 0755, true) && ! is_dir($path)) {
                 throw new RuntimeException("ساخت پوشه ممکن نشد: {$path}");
             }
+        }
+    }
 
-            return;
-        }
+    protected function isEmptyDir(string $path): bool
+    {
         $files = array_diff(scandir($path) ?: [], ['.', '..']);
-        if ($files !== [] && ! $this->isGitRepo($path)) {
-            throw new RuntimeException("پوشه خالی نیست و گیت هم نیست؛ init متوقف شد: {$path}");
-        }
+
+        return $files === [];
     }
     protected function moveCloneIntoPlace(string $path): void
     {
@@ -341,6 +356,70 @@ class GitDeployer
             'to_commit' => $to ? substr($to, 0, 40) : null,
             'status' => $status, 'message' => $message, 'output' => $output, 'actor' => $actor,
         ]);
+    }
+
+    /**
+     * بررسی‌های محیطی برای عیب‌یابی (مخصوص هاست اشتراکی).
+     *
+     * @return array<int, array{key:string,label:string,ok:bool|null,detail:string}>
+     */
+    public function diagnose(DeployProject $project): array
+    {
+        $path = $project->deploy_path;
+        $checks = [];
+
+        $procOpen = function_exists('proc_open');
+        $checks[] = [
+            'key' => 'proc_open', 'label' => 'تابع proc_open',
+            'ok' => $procOpen,
+            'detail' => $procOpen ? 'فعال است' : 'غیرفعال است؛ از پشتیبانی هاست بخواهید فعالش کند',
+        ];
+
+        try {
+            $version = $this->git->runOrFail(['--version'], null, [], 30);
+            $checks[] = ['key' => 'git', 'label' => 'باینری گیت', 'ok' => true, 'detail' => $version];
+        } catch (\Throwable $e) {
+            $checks[] = ['key' => 'git', 'label' => 'باینری گیت', 'ok' => false, 'detail' => $e->getMessage()];
+
+            return $checks;
+        }
+
+        $exists = is_dir($path);
+        $checks[] = [
+            'key' => 'path_exists', 'label' => 'وجود پوشه',
+            'ok' => $exists,
+            'detail' => $exists ? $path : $path.' — پوشه وجود ندارد؛ مسیر deploy_path را بررسی کنید',
+        ];
+
+        if ($exists) {
+            $writable = is_writable($path);
+            $checks[] = [
+                'key' => 'path_writable', 'label' => 'دسترسی نوشتن',
+                'ok' => $writable,
+                'detail' => $writable ? 'قابل نوشتن است' : 'قابل نوشتن نیست؛ سطح دسترسی پوشه را بررسی کنید',
+            ];
+        }
+
+        $isRepo = $this->isGitRepo($path);
+        $checks[] = [
+            'key' => 'is_repo', 'label' => 'اتصال گیت (init)',
+            'ok' => $isRepo,
+            'detail' => $isRepo ? 'متصل است' : 'هنوز init نشده؛ دکمه «اتصال اولیه» را بزنید',
+        ];
+
+        if ($isRepo) {
+            $remote = $this->try(fn () => $this->git->runOrFail(['remote', 'get-url', 'origin'], $path));
+            if (is_string($remote)) {
+                $masked = preg_replace('#(https?://[^:]+:)[^@]+@#', '$1***@', $remote);
+                $checks[] = ['key' => 'remote', 'label' => 'ریموت origin', 'ok' => true, 'detail' => $masked];
+            }
+            $branch = $this->try(fn () => $this->git->runOrFail(['rev-parse', '--abbrev-ref', 'HEAD'], $path));
+            if (is_string($branch)) {
+                $checks[] = ['key' => 'branch', 'label' => 'شاخه فعلی', 'ok' => true, 'detail' => $branch];
+            }
+        }
+
+        return $checks;
     }
 
     protected function try(callable $fn): mixed

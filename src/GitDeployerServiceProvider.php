@@ -2,6 +2,7 @@
 
 namespace Behin\GitDeployer;
 
+use Behin\GitDeployer\Console\Commands\DeployerDiagnoseCommand;
 use Behin\GitDeployer\Console\Commands\DeployerHistoryCommand;
 use Behin\GitDeployer\Console\Commands\DeployerInitCommand;
 use Behin\GitDeployer\Console\Commands\DeployerListCommand;
@@ -38,6 +39,7 @@ class GitDeployerServiceProvider extends ServiceProvider
 
             $this->commands([
                 DeployerListCommand::class,
+                DeployerDiagnoseCommand::class,
                 DeployerInitCommand::class,
                 DeployerStatusCommand::class,
                 DeployerHistoryCommand::class,
