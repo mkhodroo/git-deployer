@@ -75,13 +75,22 @@ class GitProcess
             }
         } while (true);
 
-        // باقی‌مانده بافرها
-        $out .= stream_get_contents($pipes[1]);
-        $err .= stream_get_contents($pipes[2]);
+        // خواندن کامل باقی‌مانده بافرها به‌صورت بلاکینگ تا خروجی گم نشود
+        // (خواندن نابالکینگ ممکن است بخشی از stderr مثل علت اصلی خطا را جا بیندازد)
+        $finalStatus = proc_get_status($process);
+        $exitCode = $finalStatus['exitcode'] ?? -1;
+        foreach ([$pipes[1], $pipes[2]] as $pipe) {
+            stream_set_blocking($pipe, true);
+        }
+        $out .= (string) stream_get_contents($pipes[1]);
+        $err .= (string) stream_get_contents($pipes[2]);
         fclose($pipes[1]);
         fclose($pipes[2]);
 
-        $exitCode = proc_close($process);
+        $closeCode = proc_close($process);
+        if ($exitCode === -1 || $exitCode === null) {
+            $exitCode = $closeCode;
+        }
 
         return [
             'exit_code' => $exitCode,
@@ -100,8 +109,15 @@ class GitProcess
         $result = $this->run($args, $cwd, $env, $timeout);
 
         if ($result['exit_code'] !== 0) {
-            $message = $result['error'] !== '' ? $result['error'] : $result['output'];
-            throw new RuntimeException("خطای گیت [{$result['command']}]: {$message}");
+            $parts = [];
+            if ($result['error'] !== '') {
+                $parts[] = $result['error'];
+            }
+            if ($result['output'] !== '' && $result['output'] !== $result['error']) {
+                $parts[] = $result['output'];
+            }
+            $message = $parts !== [] ? implode("\n", $parts) : 'کد خروج '.$result['exit_code'];
+            throw new RuntimeException("خطای گیت [{$result['command']}] (کد {$result['exit_code']}): {$message}");
         }
 
         return $result['output'];

@@ -25,10 +25,21 @@ class GitDeployer
                 $log[] = $this->git->runOrFail(['fetch', '--all', '--prune'], $path, $this->gitEnv($project));
             } else {
                 $this->ensureExists($path);
+                $parent = dirname($path);
+                $tmpClone = $path.'.tmp-clone';
+
+                // پاک‌سازی باقی‌مانده clone ناقص قبلی (رایج بعد از خطای clone)
+                if (is_dir($tmpClone) && ! $this->isGitRepo($path)) {
+                    $this->deleteDir($tmpClone);
+                }
+
+                // پیش‌بررسی اتصال به ریپو: خطاهای احراز هویت/آدرس/شاخه را زودتر و شفاف‌تر نشان می‌دهد
+                $this->preflightRemote($project);
+
                 if ($this->isEmptyDir($path)) {
                     $log[] = $this->git->runOrFail(
                         ['clone', '--branch', $project->branch, $this->authenticatedUrl($project), $path.'.tmp-clone'],
-                        dirname($path),
+                        $parent,
                         $this->gitEnv($project)
                     );
                     $this->moveCloneIntoPlace($path);
@@ -186,6 +197,46 @@ class GitDeployer
         }
 
         return $ref;
+    }
+
+    /**
+     * پیش‌بررسی دسترسی به ریپوی ریموت قبل از clone؛
+     * خطاهای رایج (ریپوی خصوصی بدون توکن، توکن نامعتبر، شاخه اشتباه) را شفاف می‌کند.
+     */
+    protected function preflightRemote(DeployProject $project): void
+    {
+        try {
+            $out = $this->git->runOrFail(
+                ['ls-remote', '--heads', $this->authenticatedUrl($project)],
+                null,
+                $this->gitEnv($project),
+                120
+            );
+        } catch (\Throwable $e) {
+            $msg = $e->getMessage();
+            $hint = '';
+            if (stripos($msg, 'could not resolve host') !== false || stripos($msg, 'Could not resolve hostname') !== false) {
+                $hint = ' — هاست به اینترنت/گیت‌هاب دسترسی ندارد یا آدرس ریپو اشتباه است.';
+            } elseif (stripos($msg, 'Authentication failed') !== false || stripos($msg, '401') !== false || stripos($msg, '403') !== false) {
+                $hint = ' — ریپو خصوصی است یا توکن نامعتبر/منقضی شده؛ نوع احراز هویت را token بگذار و توکن معتبر وارد کن.';
+            } elseif (stripos($msg, 'not found') !== false || stripos($msg, '404') !== false) {
+                $hint = ' — ریپو پیدا نشد؛ آدرس repo_url را بررسی کن.';
+            }
+            throw new RuntimeException('ارتباط با ریپو برقرار نشد'.$hint."\n".$msg);
+        }
+
+        // بررسی وجود شاخه روی ریموت
+        $branch = $project->branch;
+        $found = false;
+        foreach (explode("\n", $out) as $line) {
+            if (str_ends_with(trim($line), 'refs/heads/'.$branch)) {
+                $found = true;
+                break;
+            }
+        }
+        if (! $found) {
+            throw new RuntimeException("شاخه «{$branch}» روی ریموت پیدا نشد. نام شاخه را در تنظیمات پروژه اصلاح کن (مثلاً main یا master).");
+        }
     }
 
     protected function ensureExists(string $path): void
